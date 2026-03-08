@@ -56,10 +56,13 @@ class JSONHandler:
     def _load_existing_entries(self, csv_path):
         entries = {}
         try:
-            with open(csv_path, mode='r', encoding='utf-8') as csv_file:
-                reader = csv.reader(csv_file)
+            with open(csv_path, mode='r', encoding='utf-8', newline='') as csv_file:
+                reader = csv.DictReader(csv_file)
                 for row in reader:
-                    entries[row[1]] = row[0]  # Assuming format: uuid, text
+                    row_uuid = row.get('uuid')
+                    text = row.get('text')
+                    if row_uuid and text:
+                        entries[text] = row_uuid
         except FileNotFoundError:
             pass
         return entries
@@ -134,13 +137,19 @@ class JSONHandler:
     def _load_translated_entries(self, translated_csv, original_csv):
         entries = {}
         try:
-            with open(translated_csv, mode='r', encoding='utf-8') as csv_file:
-                reader = csv.reader(csv_file)
+            with open(translated_csv, mode='r', encoding='utf-8', newline='') as csv_file:
+                reader = csv.DictReader(csv_file)
                 for row in reader:
-                    entries[row[0]] = row[1]  # Assuming format: uuid, translated_text
+                    row_uuid = row.get('uuid')
+                    translated_text = row.get('translated_text')
+                    if row_uuid and translated_text is not None:
+                        entries[row_uuid] = translated_text
         except FileNotFoundError:
-            with open(original_csv, mode='r', encoding='utf-8') as csv_file:
-                reader = csv.reader(csv_file)
+            with open(original_csv, mode='r', encoding='utf-8', newline='') as csv_file:
+                reader = csv.DictReader(csv_file)
                 for row in reader:
-                    entries[row[0]] = row[1]  # Assuming format: uuid, original_text
+                    row_uuid = row.get('uuid')
+                    text = row.get('text')
+                    if row_uuid and text is not None:
+                        entries[row_uuid] = text
         return entries
