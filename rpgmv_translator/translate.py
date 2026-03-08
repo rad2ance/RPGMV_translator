@@ -4,6 +4,7 @@ from rpgmv_translator.utils import is_rpgmv_folder, duplicate_json_files
 from rpgmv_translator.json_handler import JSONHandler
 from rpgmv_translator.request_controller import GPTRequestController
 from rpgmv_translator.utils import read_progress_log, update_progress_log
+import rpgmv_translator.config_manager as config_manager
 
 class RPGMVTranslator:
     def __init__(self, path):
@@ -51,7 +52,11 @@ class RPGMVTranslator:
 
         if not progress.get('process_csv'):
             # Assuming GPTRequestController has been properly implemented
-            controller = GPTRequestController(max_tokens=300, language='Japanese')
+            controller = GPTRequestController(
+                max_tokens=int(config_manager.get_setting('max_tokens', 2000)),
+                language=config_manager.get_setting('language', 'Japanese'),
+                model=config_manager.get_setting('model', 'gpt-4.1-mini'),
+            )
             controller.process_csv(self.json_handler.original_csv, self.json_handler.translated_csv)
             update_progress_log(self.directory, 'process_csv')
 

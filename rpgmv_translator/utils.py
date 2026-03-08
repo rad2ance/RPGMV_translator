@@ -45,8 +45,13 @@ def restore_from_backup(directory):
     if not is_rpgmv_folder(directory):
         raise ValueError("The specified directory is not a valid RPGMV folder.")
 
-    # List of new files that should be removed if they exist
-    new_files = ['original.csv', 'translated.csv', 'progress.log']
+    # List of generated files that should be removed if they exist
+    new_files = [
+        'original.csv',
+        'translated.csv',
+        'translated.csv.part',
+        'progress.log',
+    ]
 
     # Remove new files if they exist
     for new_file in new_files:

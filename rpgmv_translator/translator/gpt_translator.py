@@ -9,6 +9,12 @@ from rpgmv_translator.utils import contains_japanese_strict
 
 
 class GPTTranslator(AbstractTranslator):
+    # USD pricing per 1K tokens (input/output) used for estimation only.
+    MODEL_PRICING_PER_1K = {
+        "gpt-4.1-mini": {"input": 0.0004, "output": 0.0016},
+        "gpt-4.1": {"input": 0.0020, "output": 0.0080},
+    }
+
     def __init__(self, api_key=None):
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         self.client = openai.OpenAI(api_key=self.api_key)
@@ -74,6 +80,22 @@ class GPTTranslator(AbstractTranslator):
                 break
 
         raise Exception("Failed to get valid translation after retries.")
+
+    def estimate_tokens_and_price(self, texts, tokenizer, model):
+        input_tokens = sum(tokenizer.get_token_count(text) for text in texts if text)
+
+        pricing = self.MODEL_PRICING_PER_1K.get(model)
+        if pricing is None:
+            # Fallback to mini pricing for unknown models.
+            pricing = self.MODEL_PRICING_PER_1K["gpt-4.1-mini"]
+
+        # Simple heuristic: output tokens are usually close to input tokens for JP->ZH translation.
+        estimated_output_tokens = input_tokens
+        estimated_price = (
+            (input_tokens / 1000.0) * pricing["input"]
+            + (estimated_output_tokens / 1000.0) * pricing["output"]
+        )
+        return input_tokens, estimated_price
 
     def _extract_dict_from_response(self, full_response):
         if not full_response:

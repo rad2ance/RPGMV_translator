@@ -40,3 +40,5 @@ original.csv
 translated.csv
 progress.log
 *.json.old
+*.part
+*.output.tmp
