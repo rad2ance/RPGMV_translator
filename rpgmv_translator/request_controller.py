@@ -9,6 +9,22 @@ except ImportError:
     def tqdm(iterable, **kwargs):
         return iterable
 
+from rpgmv_translator.entity.const import (
+    DEFAULT_MISSING_MARKER_PREFIX,
+    YES_VALUES,
+)
+from rpgmv_translator.csv_translation_helpers import (
+    append_translation_map,
+    build_pending_items,
+    build_row_lookup,
+    collect_marker_items_from_map,
+    get_temp_path,
+    load_existing_output_map,
+    load_translation_map,
+    read_csv_rows,
+    row_identifier,
+    write_translation_map,
+)
 from rpgmv_translator.translator.gpt_translator import GPTTranslator
 
 
@@ -19,12 +35,14 @@ class GPTRequestController:
         language,
         model="gpt-4.1-mini",
         target_language="Chinese",
+        custom_prompt="",
         quality_config=None,
     ):
         self.max_tokens = max_tokens
         self.language = language
         self.model = model
         self.target_language = target_language
+        self.custom_prompt = custom_prompt or ""
         self.api_key = self._load_api_key_from_config("config.json")
         self.translator = GPTTranslator(self.api_key)
         self.tokenizer = self._select_tokenizer(language)
@@ -34,7 +52,7 @@ class GPTRequestController:
         self.missing_key_abs_threshold = int(quality_config.get("missing_key_abs_threshold", 2))
         self.max_on_the_fly_retries = int(quality_config.get("max_on_the_fly_retries", 2))
         self.max_consecutive_bad_calls = int(quality_config.get("max_consecutive_bad_calls", 5))
-        self.missing_marker_prefix = quality_config.get("missing_marker_prefix", "__MISSING_TRANSLATION__")
+        self.missing_marker_prefix = quality_config.get("missing_marker_prefix", DEFAULT_MISSING_MARKER_PREFIX)
         self.cost_confirmation_usd = float(quality_config.get("cost_confirmation_usd", 10.0))
 
         self._reset_call_stats()
@@ -80,52 +98,50 @@ class GPTRequestController:
         start_time = time.time()
         self._reset_call_stats()
 
-        with open(original_csv_path, "r", encoding="utf-8-sig", newline="") as csvfile:
-            reader = csv.DictReader(csvfile)
-            required_columns = {"uuid", "text"}
-            if not reader.fieldnames or not required_columns.issubset(set(reader.fieldnames)):
-                raise ValueError(
-                    f"Input CSV must contain columns {sorted(required_columns)}. "
-                    f"Found: {reader.fieldnames}"
-                )
-            rows = list(reader)
+        rows, _ = read_csv_rows(original_csv_path, required_columns=["uuid", "text"])
 
-        temp_translated_csv_path = self._get_temp_path(translated_csv_path)
+        temp_translated_csv_path = get_temp_path(translated_csv_path)
         source_progress_path = temp_translated_csv_path if os.path.exists(temp_translated_csv_path) else translated_csv_path
-        existing_translations = self._load_translation_map(source_progress_path, "uuid", "translated_text")
-        self._write_translation_map(temp_translated_csv_path, "uuid", "translated_text", existing_translations)
+        existing_translations = load_translation_map(source_progress_path, "uuid", "translated_text")
+        source_has_any = any((row.get("text") or "").strip() for row in rows)
+        overwrite_existing = self._confirm_precheck(
+            target_has_values=bool(existing_translations),
+            source_has_values=source_has_any,
+            target_column="translated_text",
+        )
+        if overwrite_existing:
+            existing_translations = {}
 
-        processed_uuids = set(existing_translations.keys())
-        pending_items = []
-        for row in rows:
-            row_uuid = row.get("uuid", "")
-            text = row.get("text", "")
-            if row_uuid and row_uuid not in processed_uuids and text:
-                pending_items.append((row_uuid, text))
+        write_translation_map(temp_translated_csv_path, "uuid", "translated_text", existing_translations)
+        pending_items = build_pending_items(
+            rows=rows,
+            source_column="text",
+            id_column="uuid",
+            existing_translations=existing_translations,
+            overwrite_existing=overwrite_existing,
+        )
 
         token_count, estimated_price = self._estimate_tokens_and_price([text for _, text in pending_items])
         print(f"Total tokens to translate: {token_count}")
         print(f"Estimated price for translation: ${estimated_price:.2f}")
-
-        any_target_populated = bool(existing_translations)
-        source_has_any = any((row.get("text") or "").strip() for row in rows)
-        self._confirm_if_needed(estimated_price, any_target_populated, source_has_any, "translated_text")
+        self._confirm_cost_if_needed(estimated_price)
 
         self._translate_items_in_batches(
             pending_items,
-            on_batch_translated=lambda batch: self._append_translation_map(
+            on_batch_translated=lambda batch: append_translation_map(
                 temp_translated_csv_path, "uuid", "translated_text", batch
             ),
         )
 
-        retry_items = self._collect_marker_items_from_map(
-            self._load_translation_map(temp_translated_csv_path, "uuid", "translated_text"),
-            row_lookup={row.get("uuid", ""): row.get("text", "") for row in rows},
+        retry_items = collect_marker_items_from_map(
+            load_translation_map(temp_translated_csv_path, "uuid", "translated_text"),
+            row_lookup=build_row_lookup(rows, "text", "uuid"),
+            is_missing_marker_fn=self._is_missing_marker,
         )
         if retry_items:
             self._translate_items_in_batches(
                 retry_items,
-                on_batch_translated=lambda batch: self._append_translation_map(
+                on_batch_translated=lambda batch: append_translation_map(
                     temp_translated_csv_path, "uuid", "translated_text", batch
                 ),
             )
@@ -137,58 +153,59 @@ class GPTRequestController:
         start_time = time.time()
         self._reset_call_stats()
 
-        with open(input_csv_path, "r", encoding="utf-8-sig", newline="") as csvfile:
-            reader = csv.DictReader(csvfile)
-            if not reader.fieldnames:
-                raise ValueError("Input CSV has no header row.")
-            if source_column not in reader.fieldnames:
-                raise ValueError(f"Source column '{source_column}' was not found in CSV header: {reader.fieldnames}")
-            if id_column and id_column not in reader.fieldnames:
-                raise ValueError(f"ID column '{id_column}' was not found in CSV header: {reader.fieldnames}")
-            rows = list(reader)
-            input_fieldnames = list(reader.fieldnames)
+        rows, input_fieldnames = read_csv_rows(input_csv_path)
+        if source_column not in input_fieldnames:
+            raise ValueError(f"Source column '{source_column}' was not found in CSV header: {input_fieldnames}")
+        if id_column and id_column not in input_fieldnames:
+            raise ValueError(f"ID column '{id_column}' was not found in CSV header: {input_fieldnames}")
 
-        progress_path = self._get_temp_path(output_csv_path)
-        existing_translations = self._load_existing_output_map(progress_path, target_column, id_column)
+        progress_path = get_temp_path(output_csv_path)
+        existing_translations = load_existing_output_map(progress_path, target_column, id_column)
         if not existing_translations:
-            existing_translations = self._load_existing_output_map(output_csv_path, target_column, id_column)
+            existing_translations = load_existing_output_map(output_csv_path, target_column, id_column)
+
+        any_target_populated = any((row.get(target_column) or "").strip() for row in rows)
+        source_has_any = any((row.get(source_column) or "").strip() for row in rows)
+        overwrite_existing = self._confirm_precheck(
+            target_has_values=any_target_populated,
+            source_has_values=source_has_any,
+            target_column=target_column,
+        )
+
+        if overwrite_existing:
+            existing_translations = {}
 
         temp_id_column = id_column or "__row_index__"
-        self._write_translation_map(progress_path, temp_id_column, target_column, existing_translations)
-
-        pending_items = []
-        for index, row in enumerate(rows):
-            row_id = row.get(id_column) if id_column else str(index)
-            source_text = (row.get(source_column) or "").strip()
-            if not source_text:
-                continue
-            if row_id in existing_translations and existing_translations[row_id]:
-                continue
-            pending_items.append((row_id, source_text))
+        write_translation_map(progress_path, temp_id_column, target_column, existing_translations)
+        pending_items = build_pending_items(
+            rows=rows,
+            source_column=source_column,
+            id_column=id_column,
+            existing_translations=existing_translations,
+            overwrite_existing=overwrite_existing,
+        )
 
         token_count, estimated_price = self._estimate_tokens_and_price([text for _, text in pending_items])
         print(f"Total tokens to translate: {token_count}")
         print(f"Estimated price for translation: ${estimated_price:.2f}")
-
-        any_target_populated = any((row.get(target_column) or "").strip() for row in rows)
-        source_has_any = any((row.get(source_column) or "").strip() for row in rows)
-        self._confirm_if_needed(estimated_price, any_target_populated, source_has_any, target_column)
+        self._confirm_cost_if_needed(estimated_price)
 
         new_translations = self._translate_items_in_batches(
             pending_items,
-            on_batch_translated=lambda batch: self._append_translation_map(
+            on_batch_translated=lambda batch: append_translation_map(
                 progress_path, temp_id_column, target_column, batch
             ),
         )
 
-        marker_retry_items = self._collect_marker_items_from_map(new_translations, row_lookup={
-            (row.get(id_column) if id_column else str(index)): (row.get(source_column) or "")
-            for index, row in enumerate(rows)
-        })
+        marker_retry_items = collect_marker_items_from_map(
+            new_translations,
+            row_lookup=build_row_lookup(rows, source_column, id_column),
+            is_missing_marker_fn=self._is_missing_marker,
+        )
         if marker_retry_items:
             marker_retry_translations = self._translate_items_in_batches(
                 marker_retry_items,
-                on_batch_translated=lambda batch: self._append_translation_map(
+                on_batch_translated=lambda batch: append_translation_map(
                     progress_path, temp_id_column, target_column, batch
                 ),
             )
@@ -198,12 +215,12 @@ class GPTRequestController:
         if target_column not in output_fieldnames:
             output_fieldnames.append(target_column)
 
-        temp_output_path = self._get_temp_path(output_csv_path, suffix=".output.tmp")
+        temp_output_path = get_temp_path(output_csv_path, suffix=".output.tmp")
         with open(temp_output_path, "w", encoding="utf-8", newline="") as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=output_fieldnames)
             writer.writeheader()
             for index, row in enumerate(rows):
-                row_id = row.get(id_column) if id_column else str(index)
+                row_id = row_identifier(row, id_column, index)
                 source_text = row.get(source_column) or ""
 
                 translated = None
@@ -282,33 +299,13 @@ class GPTRequestController:
                 batch_texts,
                 model=self.model,
                 target_language=self.target_language,
+                custom_prompt=self.custom_prompt,
             )
             valid_mapping = {k: v for k, v in raw_mapping.items() if k in unique_texts and isinstance(v, str)}
 
-            coverage = (len(valid_mapping) / len(unique_texts)) if unique_texts else 1.0
-            missing_count = len(unique_texts) - len(valid_mapping)
-
-            self.total_calls += 1
-            if missing_count == 0:
-                self.complete_calls += 1
-
-            meets_threshold = (
-                coverage >= self.key_coverage_rate_threshold
-                or missing_count < self.missing_key_abs_threshold
-            )
-            if meets_threshold:
-                self.above_threshold_calls += 1
-                self.consecutive_bad_calls = 0
-            else:
-                self.consecutive_bad_calls += 1
+            coverage, missing_count, should_retry = self._evaluate_mapping_quality(valid_mapping, unique_texts, attempts)
 
             final_mapping = valid_mapping
-
-            should_retry = (
-                coverage < self.key_coverage_rate_threshold
-                and missing_count >= self.missing_key_abs_threshold
-                and attempts < self.max_on_the_fly_retries
-            )
 
             if self.consecutive_bad_calls >= self.max_consecutive_bad_calls:
                 raise RuntimeError(
@@ -329,6 +326,31 @@ class GPTRequestController:
             result[row_id] = translated
 
         return result
+
+    def _evaluate_mapping_quality(self, valid_mapping, unique_texts, attempts):
+        coverage = (len(valid_mapping) / len(unique_texts)) if unique_texts else 1.0
+        missing_count = len(unique_texts) - len(valid_mapping)
+
+        self.total_calls += 1
+        if missing_count == 0:
+            self.complete_calls += 1
+
+        meets_threshold = (
+            coverage >= self.key_coverage_rate_threshold
+            or missing_count < self.missing_key_abs_threshold
+        )
+        if meets_threshold:
+            self.above_threshold_calls += 1
+            self.consecutive_bad_calls = 0
+        else:
+            self.consecutive_bad_calls += 1
+
+        should_retry = (
+            coverage < self.key_coverage_rate_threshold
+            and missing_count >= self.missing_key_abs_threshold
+            and attempts < self.max_on_the_fly_retries
+        )
+        return coverage, missing_count, should_retry
 
     def _split_text(self, text, max_tokens):
         if hasattr(self.tokenizer, "split_text_by_max_tokens"):
@@ -355,21 +377,31 @@ class GPTRequestController:
 
         return segments
 
-    def _confirm_if_needed(self, estimated_price, target_has_values, source_has_values, target_column):
-        reasons = []
-        if estimated_price > self.cost_confirmation_usd:
-            reasons.append(f"estimated cost ${estimated_price:.2f} is above ${self.cost_confirmation_usd:.2f}")
-        if target_has_values:
-            reasons.append(f"target column '{target_column}' already has values")
+    def _confirm_precheck(self, target_has_values, source_has_values, target_column):
         if not source_has_values:
-            reasons.append("source column has no translatable values")
+            answer = input("Proceed? source column has no translatable values. Type 'yes' to continue: ").strip().lower()
+            if answer not in YES_VALUES:
+                raise RuntimeError("Translation cancelled by user.")
 
-        if not reasons:
+        if not target_has_values:
+            return False
+
+        answer = input(
+            f"Proceed? target column '{target_column}' already has values and will be overwritten. "
+            "Type 'yes' to continue: "
+        ).strip().lower()
+        if answer not in YES_VALUES:
+            raise RuntimeError("Translation cancelled by user.")
+        return True
+
+    def _confirm_cost_if_needed(self, estimated_price):
+        if estimated_price <= self.cost_confirmation_usd:
             return
-
-        reason_text = "; ".join(reasons)
-        answer = input(f"Proceed? {reason_text}. Type 'yes' to continue: ").strip().lower()
-        if answer not in {"y", "yes"}:
+        answer = input(
+            f"Proceed? estimated cost ${estimated_price:.2f} is above ${self.cost_confirmation_usd:.2f}. "
+            "Type 'yes' to continue: "
+        ).strip().lower()
+        if answer not in YES_VALUES:
             raise RuntimeError("Translation cancelled by user.")
 
     def _build_missing_marker(self, row_id):
@@ -377,15 +409,6 @@ class GPTRequestController:
 
     def _is_missing_marker(self, value):
         return isinstance(value, str) and value.startswith(f"{self.missing_marker_prefix}:")
-
-    def _collect_marker_items_from_map(self, translated_map, row_lookup):
-        items = []
-        for row_id, translated in translated_map.items():
-            if self._is_missing_marker(translated):
-                original_text = row_lookup.get(row_id, "")
-                if original_text:
-                    items.append((row_id, original_text))
-        return items
 
     def _print_run_summary(self, start_time):
         elapsed = time.time() - start_time
@@ -399,53 +422,3 @@ class GPTRequestController:
         print(f"Complete-success call rate: {complete_rate:.2%}")
         print(f"Above-threshold call rate: {above_threshold_rate:.2%}")
         print(f"Time taken: {elapsed:.2f}s")
-
-    def _load_existing_output_map(self, output_csv_path, target_column, id_column):
-        if not os.path.exists(output_csv_path):
-            return {}
-
-        with open(output_csv_path, "r", encoding="utf-8", newline="") as csvfile:
-            reader = csv.DictReader(csvfile)
-            if not reader.fieldnames or target_column not in reader.fieldnames:
-                return {}
-
-            output_map = {}
-            for index, row in enumerate(reader):
-                row_id = row.get(id_column) if id_column else str(index)
-                if row_id is None:
-                    continue
-                output_map[row_id] = row.get(target_column, "")
-            return output_map
-
-    def _get_temp_path(self, file_path, suffix=".part"):
-        return f"{file_path}{suffix}"
-
-    def _load_translation_map(self, file_path, id_column, translation_column):
-        if not os.path.exists(file_path):
-            return {}
-
-        with open(file_path, "r", encoding="utf-8", newline="") as csvfile:
-            reader = csv.DictReader(csvfile)
-            if not reader.fieldnames or id_column not in reader.fieldnames or translation_column not in reader.fieldnames:
-                return {}
-
-            output_map = {}
-            for row in reader:
-                row_id = row.get(id_column)
-                if row_id is None:
-                    continue
-                output_map[row_id] = row.get(translation_column, "")
-            return output_map
-
-    def _write_translation_map(self, file_path, id_column, translation_column, items):
-        with open(file_path, "w", newline="", encoding="utf-8") as csvfile:
-            fieldnames = [id_column, translation_column]
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-            for row_id, translated_text in items.items():
-                writer.writerow({id_column: row_id, translation_column: translated_text})
-
-    def _append_translation_map(self, file_path, id_column, translation_column, items):
-        current = self._load_translation_map(file_path, id_column, translation_column)
-        current.update(items)
-        self._write_translation_map(file_path, id_column, translation_column, current)

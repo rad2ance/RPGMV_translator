@@ -1,5 +1,8 @@
 import json
 import os
+from copy import deepcopy
+
+from rpgmv_translator.entity.const import DEFAULT_MISSING_MARKER_PREFIX
 
 # Get the directory where the current script is located (package directory)
 package_directory = os.path.dirname(os.path.abspath(__file__))
@@ -9,12 +12,13 @@ DEFAULT_CONFIG = {
     'language': 'Japanese',
     'model': 'gpt-4.1-mini',
     'target_language': 'Chinese',
+    'custom_prompt': '',
     'quality': {
         'key_coverage_rate_threshold': 0.9,
         'missing_key_abs_threshold': 2,
         'max_on_the_fly_retries': 2,
         'max_consecutive_bad_calls': 5,
-        'missing_marker_prefix': '__MISSING_TRANSLATION__',
+        'missing_marker_prefix': DEFAULT_MISSING_MARKER_PREFIX,
         'cost_confirmation_usd': 10.0,
     },
 }
@@ -22,7 +26,7 @@ DEFAULT_CONFIG = {
 
 def load_config():
     if not os.path.exists(CONFIG_FILE):
-        return dict(DEFAULT_CONFIG)
+        return deepcopy(DEFAULT_CONFIG)
 
     with open(CONFIG_FILE, 'r', encoding='utf-8') as file:
         try:
@@ -30,8 +34,7 @@ def load_config():
         except json.JSONDecodeError:
             user_config = {}
 
-    config = dict(DEFAULT_CONFIG)
-    config['quality'] = dict(DEFAULT_CONFIG['quality'])
+    config = deepcopy(DEFAULT_CONFIG)
     if isinstance(user_config, dict):
         config.update(user_config)
         if isinstance(user_config.get('quality'), dict):
@@ -71,4 +74,4 @@ def get_setting(key, default=None):
 def reset_config():
     # Recreate config with defaults instead of removing the file.
     with open(CONFIG_FILE, 'w', encoding='utf-8') as file:
-        json.dump(DEFAULT_CONFIG, file, indent=4)
+        json.dump(deepcopy(DEFAULT_CONFIG), file, indent=4)

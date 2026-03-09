@@ -1,5 +1,6 @@
 import os
 import sys
+from rpgmv_translator.entity.const import DEFAULT_MISSING_MARKER_PREFIX
 from rpgmv_translator.utils import is_rpgmv_folder, duplicate_json_files
 from rpgmv_translator.json_handler import JSONHandler
 from rpgmv_translator.request_controller import GPTRequestController
@@ -59,12 +60,13 @@ class RPGMVTranslator:
                 language=config.get('language', 'Japanese'),
                 model=config.get('model', 'gpt-4.1-mini'),
                 target_language=config.get('target_language', 'Chinese'),
+                custom_prompt=config.get('custom_prompt', ''),
                 quality_config={
                     'key_coverage_rate_threshold': float(quality.get('key_coverage_rate_threshold', 0.9)),
                     'missing_key_abs_threshold': int(quality.get('missing_key_abs_threshold', 2)),
                     'max_on_the_fly_retries': int(quality.get('max_on_the_fly_retries', 2)),
                     'max_consecutive_bad_calls': int(quality.get('max_consecutive_bad_calls', 5)),
-                    'missing_marker_prefix': quality.get('missing_marker_prefix', '__MISSING_TRANSLATION__'),
+                    'missing_marker_prefix': quality.get('missing_marker_prefix', DEFAULT_MISSING_MARKER_PREFIX),
                     'cost_confirmation_usd': float(quality.get('cost_confirmation_usd', 10.0)),
                 },
             )

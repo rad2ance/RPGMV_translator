@@ -4,6 +4,7 @@ import time
 
 import openai
 
+from rpgmv_translator.entity.const import SYSTEM_PROMPT_TEMPLATE
 from rpgmv_translator.translator.translator_base import AbstractTranslator
 
 
@@ -18,22 +19,27 @@ class GPTTranslator(AbstractTranslator):
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         self.client = openai.OpenAI(api_key=self.api_key)
 
-    def translate(self, texts, model="gpt-4.1-mini", split_attempt=False, target_language="Chinese"):
+    def translate(self, texts, model="gpt-4.1-mini", split_attempt=False, target_language="Chinese", custom_prompt=""):
         del split_attempt  # Compatibility with prior interface.
         if not texts:
             return []
 
-        translated_map = self.translate_to_mapping(texts, model=model, target_language=target_language)
+        translated_map = self.translate_to_mapping(
+            texts,
+            model=model,
+            target_language=target_language,
+            custom_prompt=custom_prompt,
+        )
         return [translated_map.get(original_text, original_text) for original_text in texts]
 
-    def translate_to_mapping(self, texts, model="gpt-4.1-mini", target_language="Chinese"):
+    def translate_to_mapping(self, texts, model="gpt-4.1-mini", target_language="Chinese", custom_prompt=""):
         if not texts:
             return {}
 
         max_retries = 3
         attempts = 0
         retry_delay = 1
-        prompt = self._build_prompt(texts, target_language)
+        prompt = self._build_prompt(texts, target_language, custom_prompt)
 
         while attempts < max_retries:
             try:
@@ -118,12 +124,10 @@ class GPTTranslator(AbstractTranslator):
 
         return None
 
-    def _build_prompt(self, texts, target_language):
+    def _build_prompt(self, texts, target_language, custom_prompt=""):
         json_list = json.dumps(texts, ensure_ascii=False)
-        return (
-            f"Translate Japanese strings to {target_language}. "
-            "Return exactly one JSON object where each key is the exact original source string and each value is the translated target-language string. "
-            "Do not translate English-only strings. "
-            "Do not return any text outside the JSON object. "
-            f"Input array: {json_list}"
-        )
+        prompt = SYSTEM_PROMPT_TEMPLATE.format(target_language=target_language)
+        if custom_prompt:
+            prompt = f"{prompt}\nAdditional translation guidance:\n{custom_prompt.strip()}"
+        prompt = f"{prompt}\nInput array: {json_list}"
+        return prompt

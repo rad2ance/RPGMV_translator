@@ -42,3 +42,6 @@ progress.log
 *.json.old
 *.part
 *.output.tmp
+
+# Other random stuff
+shit.py

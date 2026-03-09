@@ -1,6 +1,7 @@
 import argparse
 import os
 import unittest
+from rpgmv_translator.entity.const import DEFAULT_MISSING_MARKER_PREFIX
 from rpgmv_translator.translate import RPGMVTranslator  # Import the RPGMVTranslator class
 from rpgmv_translator.request_controller import GPTRequestController
 import rpgmv_translator.config_manager as config_manager
@@ -21,13 +22,14 @@ def main():
     default_max_tokens = int(config.get('max_tokens', 2000))
     default_model = config.get('model', 'gpt-4.1-mini')
     default_target_language = config.get('target_language', 'Chinese')
+    default_custom_prompt = config.get('custom_prompt', '')
     quality = config.get('quality', {})
     quality_config = {
         'key_coverage_rate_threshold': float(quality.get('key_coverage_rate_threshold', 0.9)),
         'missing_key_abs_threshold': int(quality.get('missing_key_abs_threshold', 2)),
         'max_on_the_fly_retries': int(quality.get('max_on_the_fly_retries', 2)),
         'max_consecutive_bad_calls': int(quality.get('max_consecutive_bad_calls', 5)),
-        'missing_marker_prefix': quality.get('missing_marker_prefix', '__MISSING_TRANSLATION__'),
+        'missing_marker_prefix': quality.get('missing_marker_prefix', DEFAULT_MISSING_MARKER_PREFIX),
         'cost_confirmation_usd': float(quality.get('cost_confirmation_usd', 10.0)),
     }
 
@@ -47,6 +49,7 @@ def main():
     parser.add_argument('--max-tokens', type=int, default=default_max_tokens, help='Max token batch size per request. Uses config default if set.')
     parser.add_argument('--model', type=str, default=default_model, help='OpenAI model to use for translation. Uses config default if set.')
     parser.add_argument('--target-language', type=str, default=default_target_language, help='Target translation language. Uses config default if set.')
+    parser.add_argument('--custom-prompt', type=str, default=default_custom_prompt, help='Extra prompt text appended to system prompt.')
 
     args = parser.parse_args()
 
@@ -88,6 +91,7 @@ def main():
             language=args.language,
             model=args.model,
             target_language=args.target_language,
+            custom_prompt=args.custom_prompt,
             quality_config=quality_config,
         )
         controller.process_arbitrary_csv(
