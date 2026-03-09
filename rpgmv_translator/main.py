@@ -59,8 +59,12 @@ def main():
         key = config_manager.show_key()
         print(f"API Key: {key}")
     elif args.reset:
-        config_manager.reset_config()
-        print("Config reset.")
+        confirm = input("Reset config to defaults and remove stored API key? Type 'yes' to continue: ").strip().lower()
+        if confirm in {'y', 'yes'}:
+            config_manager.reset_config()
+            print("Config reset to defaults.")
+        else:
+            print("Config reset cancelled.")
     elif args.restore is not None:
         try:
             utils.restore_from_backup(args.restore)

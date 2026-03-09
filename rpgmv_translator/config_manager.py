@@ -69,5 +69,6 @@ def get_setting(key, default=None):
     return default
 
 def reset_config():
-    if os.path.exists(CONFIG_FILE):
-        os.remove(CONFIG_FILE)
+    # Recreate config with defaults instead of removing the file.
+    with open(CONFIG_FILE, 'w', encoding='utf-8') as file:
+        json.dump(DEFAULT_CONFIG, file, indent=4)
