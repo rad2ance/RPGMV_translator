@@ -8,6 +8,15 @@ DEFAULT_CONFIG = {
     'max_tokens': 2000,
     'language': 'Japanese',
     'model': 'gpt-4.1-mini',
+    'target_language': 'Chinese',
+    'quality': {
+        'key_coverage_rate_threshold': 0.9,
+        'missing_key_abs_threshold': 2,
+        'max_on_the_fly_retries': 2,
+        'max_consecutive_bad_calls': 5,
+        'missing_marker_prefix': '__MISSING_TRANSLATION__',
+        'cost_confirmation_usd': 10.0,
+    },
 }
 
 
@@ -22,8 +31,24 @@ def load_config():
             user_config = {}
 
     config = dict(DEFAULT_CONFIG)
+    config['quality'] = dict(DEFAULT_CONFIG['quality'])
     if isinstance(user_config, dict):
         config.update(user_config)
+        if isinstance(user_config.get('quality'), dict):
+            config['quality'].update(user_config['quality'])
+
+        # Backward compatibility for older flat quality keys.
+        legacy_keys = [
+            'key_coverage_rate_threshold',
+            'missing_key_abs_threshold',
+            'max_on_the_fly_retries',
+            'max_consecutive_bad_calls',
+            'missing_marker_prefix',
+            'cost_confirmation_usd',
+        ]
+        for legacy_key in legacy_keys:
+            if legacy_key in user_config:
+                config['quality'][legacy_key] = user_config[legacy_key]
     return config
 
 def add_key(api_key):

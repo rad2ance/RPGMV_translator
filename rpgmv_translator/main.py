@@ -20,6 +20,16 @@ def main():
     default_language = config.get('language', 'Japanese')
     default_max_tokens = int(config.get('max_tokens', 2000))
     default_model = config.get('model', 'gpt-4.1-mini')
+    default_target_language = config.get('target_language', 'Chinese')
+    quality = config.get('quality', {})
+    quality_config = {
+        'key_coverage_rate_threshold': float(quality.get('key_coverage_rate_threshold', 0.9)),
+        'missing_key_abs_threshold': int(quality.get('missing_key_abs_threshold', 2)),
+        'max_on_the_fly_retries': int(quality.get('max_on_the_fly_retries', 2)),
+        'max_consecutive_bad_calls': int(quality.get('max_consecutive_bad_calls', 5)),
+        'missing_marker_prefix': quality.get('missing_marker_prefix', '__MISSING_TRANSLATION__'),
+        'cost_confirmation_usd': float(quality.get('cost_confirmation_usd', 10.0)),
+    }
 
     parser = argparse.ArgumentParser(description="RPGMV Translator Command Line Tool")
     parser.add_argument('-addkey', '--addkey', type=str, help='Add API key to config')
@@ -36,6 +46,7 @@ def main():
     parser.add_argument('--language', type=str, default=default_language, help='Tokenizer language. Uses config default if set.')
     parser.add_argument('--max-tokens', type=int, default=default_max_tokens, help='Max token batch size per request. Uses config default if set.')
     parser.add_argument('--model', type=str, default=default_model, help='OpenAI model to use for translation. Uses config default if set.')
+    parser.add_argument('--target-language', type=str, default=default_target_language, help='Target translation language. Uses config default if set.')
 
     args = parser.parse_args()
 
@@ -68,7 +79,13 @@ def main():
         input_csv = args.translate_csv
         output_csv = args.output_csv or input_csv
 
-        controller = GPTRequestController(max_tokens=args.max_tokens, language=args.language, model=args.model)
+        controller = GPTRequestController(
+            max_tokens=args.max_tokens,
+            language=args.language,
+            model=args.model,
+            target_language=args.target_language,
+            quality_config=quality_config,
+        )
         controller.process_arbitrary_csv(
             input_csv_path=input_csv,
             output_csv_path=output_csv,

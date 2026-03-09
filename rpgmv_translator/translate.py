@@ -52,10 +52,21 @@ class RPGMVTranslator:
 
         if not progress.get('process_csv'):
             # Assuming GPTRequestController has been properly implemented
+            config = config_manager.load_config()
+            quality = config.get('quality', {})
             controller = GPTRequestController(
-                max_tokens=int(config_manager.get_setting('max_tokens', 2000)),
-                language=config_manager.get_setting('language', 'Japanese'),
-                model=config_manager.get_setting('model', 'gpt-4.1-mini'),
+                max_tokens=int(config.get('max_tokens', 2000)),
+                language=config.get('language', 'Japanese'),
+                model=config.get('model', 'gpt-4.1-mini'),
+                target_language=config.get('target_language', 'Chinese'),
+                quality_config={
+                    'key_coverage_rate_threshold': float(quality.get('key_coverage_rate_threshold', 0.9)),
+                    'missing_key_abs_threshold': int(quality.get('missing_key_abs_threshold', 2)),
+                    'max_on_the_fly_retries': int(quality.get('max_on_the_fly_retries', 2)),
+                    'max_consecutive_bad_calls': int(quality.get('max_consecutive_bad_calls', 5)),
+                    'missing_marker_prefix': quality.get('missing_marker_prefix', '__MISSING_TRANSLATION__'),
+                    'cost_confirmation_usd': float(quality.get('cost_confirmation_usd', 10.0)),
+                },
             )
             controller.process_csv(self.json_handler.original_csv, self.json_handler.translated_csv)
             update_progress_log(self.directory, 'process_csv')
